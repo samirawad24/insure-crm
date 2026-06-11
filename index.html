@@ -415,12 +415,23 @@ const Agent = ({onAddLeads, apiKey, zips})=>{
 
   const toggleAutoRun = val=>{ setAutoRun(val); ls.set('agent_autorun',val); };
 
+  // Recursively find the first array with 2+ items in a response object
+  const findArray = (obj, depth=0) => {
+    if(depth>4) return null;
+    if(Array.isArray(obj) && obj.length>0) return obj;
+    if(obj && typeof obj==='object'){
+      for(const k of Object.keys(obj)){
+        const found=findArray(obj[k],depth+1);
+        if(found) return found;
+      }
+    }
+    return null;
+  };
+
   // Parse whatever shape private-zillow returns
   const parseProps = (data, zip) => {
-    const raw = data.props||data.results||data.listResults
-      ||data.cat1?.searchResults?.listResults
-      ||data.searchResults?.listResults
-      ||(Array.isArray(data)?data:[]);
+    const raw = findArray(data) || [];
+    addLog(`Parsing ${raw.length} raw items from response`);
     return raw.slice(0,20).map(p=>{
       const hi=p.hdpData?.homeInfo||{};
       const price=p.price||hi.price||p.unformattedPrice||0;
@@ -448,16 +459,16 @@ const Agent = ({onAddLeads, apiKey, zips})=>{
     for(const zip of zips.slice(0,5)){
       try{
         addLog(`Searching ZIP ${zip}…`);
-        // Try /search/byaddress first (more reliable for zip-level recently sold)
-        const res=await fetch(`https://private-zillow.p.rapidapi.com/search/byaddress?address=${zip}&status=recently_sold`,{
+        const zillowUrl=`https://www.zillow.com/homes/recently_sold/${zip}_rb/`;
+        const res=await fetch(`https://private-zillow.p.rapidapi.com/search/byurl?url=${encodeURIComponent(zillowUrl)}`,{
           headers:{'x-rapidapi-host':'private-zillow.p.rapidapi.com','x-rapidapi-key':apiKey}
         });
         if(!res.ok) throw new Error(`HTTP ${res.status}`);
         const data=await res.json();
-        addLog(`Raw keys for ${zip}: ${Object.keys(data).join(', ')}`);
+        addLog(`Response keys: ${Object.keys(data).join(', ')} | resultsCount: ${data.resultsCount??'N/A'}`);
         const props=parseProps(data,zip);
         all.push(...props);
-        addLog(`✓ ${props.length} properties found in ${zip}`);
+        addLog(`✓ ${props.length} leads added from ${zip}`);
       }catch(e){
         addLog(`✗ Error for ${zip}: ${e.message}`);
         setErr(prev=>`${prev}${prev?'\n':''}${zip}: ${e.message}`);
