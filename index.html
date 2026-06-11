@@ -400,12 +400,44 @@ const Agent = ({onAddLeads, apiKey, zips})=>{
   const [loading,setLoading]=useState(false);
   const [err,setErr]=useState('');
   const [added,setAdded]=useState(new Set());
-  const [autoRun,setAutoRun]=useState(false);
+  const [autoRun,setAutoRun]=useState(()=>ls.get('agent_autorun',false));
   const [lastRun,setLastRun]=useState(ls.get('agent_lastrun',null));
-  const [log,setLog]=useState([]);
+  const [log,setLog]=useState(()=>ls.get('agent_log',[]));
   const timer=useRef(null);
 
-  const addLog = msg=>setLog(p=>[{time:new Date().toLocaleTimeString(),msg},...p.slice(0,19)]);
+  const addLog = msg=>setLog(p=>{
+    const next=[{time:new Date().toLocaleTimeString(),msg},...p.slice(0,99)];
+    ls.set('agent_log',next);
+    return next;
+  });
+
+  const clearLog = ()=>{ setLog([]); ls.set('agent_log',[]); };
+
+  const toggleAutoRun = val=>{ setAutoRun(val); ls.set('agent_autorun',val); };
+
+  // Parse whatever shape private-zillow returns
+  const parseProps = (data, zip) => {
+    const raw = data.props||data.results||data.listResults
+      ||data.cat1?.searchResults?.listResults
+      ||data.searchResults?.listResults
+      ||(Array.isArray(data)?data:[]);
+    return raw.slice(0,20).map(p=>{
+      const hi=p.hdpData?.homeInfo||{};
+      const price=p.price||hi.price||p.unformattedPrice||0;
+      const sold=p.soldDate||hi.dateSold||p.soldPrice||null;
+      return {
+        id:uid(), name:'', phone:'',
+        address:p.streetAddress||p.address||hi.streetAddress||'',
+        city:p.city||hi.city||'', state:p.state||hi.state||'FL',
+        zip:p.zipcode||hi.zipcode||zip,
+        salePrice:price?`$${Number(price).toLocaleString()}`:'',
+        saleDate:sold?new Date(sold).toISOString().slice(0,10):'',
+        status:'not_called', source:'agent', addedDate:toDay(),
+        notes:`Recently sold · ${price?'$'+Number(price).toLocaleString():'N/A'} · ${p.beds||p.bedrooms||hi.bedrooms||'?'}bd / ${p.baths||p.bathrooms||hi.bathrooms||'?'}ba`,
+        policyInterest:'Life Insurance', email:'', followUpDate:'',
+      };
+    }).filter(p=>p.address);
+  };
 
   const runAgent=useCallback(async()=>{
     if(!apiKey){setErr('Add your RapidAPI key in Settings first.');return;}
@@ -416,26 +448,14 @@ const Agent = ({onAddLeads, apiKey, zips})=>{
     for(const zip of zips.slice(0,5)){
       try{
         addLog(`Searching ZIP ${zip}…`);
-        const zillowUrl=`https://www.zillow.com/homes/recently_sold/${zip}_rb/`;
-        const res=await fetch(`https://private-zillow.p.rapidapi.com/search/byurl?url=${encodeURIComponent(zillowUrl)}`,{
+        // Try /search/byaddress first (more reliable for zip-level recently sold)
+        const res=await fetch(`https://private-zillow.p.rapidapi.com/search/byaddress?address=${zip}&status=recently_sold`,{
           headers:{'x-rapidapi-host':'private-zillow.p.rapidapi.com','x-rapidapi-key':apiKey}
         });
         if(!res.ok) throw new Error(`HTTP ${res.status}`);
         const data=await res.json();
-        // private-zillow returns results in data.props, data.results, or data.listResults
-        const raw=(data.props||data.results||data.listResults||data.cat1?.searchResults?.listResults||[]);
-        const props=raw.slice(0,15).map(p=>({
-          id:uid(), name:'', phone:'',
-          address:p.streetAddress||p.address||p.hdpData?.homeInfo?.streetAddress||'',
-          city:p.city||p.hdpData?.homeInfo?.city||'',
-          state:p.state||p.hdpData?.homeInfo?.state||'FL',
-          zip:p.zipcode||p.hdpData?.homeInfo?.zipcode||zip,
-          salePrice:(p.price||p.hdpData?.homeInfo?.price)?`$${Number(p.price||p.hdpData?.homeInfo?.price).toLocaleString()}`:'',
-          saleDate:(p.soldDate||p.hdpData?.homeInfo?.dateSold)?new Date(p.soldDate||p.hdpData?.homeInfo?.dateSold).toISOString().slice(0,10):'',
-          status:'not_called', source:'agent', addedDate:toDay(),
-          notes:`Recently sold · ${(p.price||p.hdpData?.homeInfo?.price)?'$'+Number(p.price||p.hdpData?.homeInfo?.price).toLocaleString():'N/A'} · ${p.beds||p.hdpData?.homeInfo?.bedrooms||'?'} bed / ${p.baths||p.hdpData?.homeInfo?.bathrooms||'?'} bath`,
-          policyInterest:'Life Insurance', email:'',followUpDate:'',
-        }));
+        addLog(`Raw keys for ${zip}: ${Object.keys(data).join(', ')}`);
+        const props=parseProps(data,zip);
         all.push(...props);
         addLog(`✓ ${props.length} properties found in ${zip}`);
       }catch(e){
@@ -483,7 +503,7 @@ const Agent = ({onAddLeads, apiKey, zips})=>{
             <button onClick={runAgent} disabled={loading} className="flex items-center gap-2 px-4 py-2 bg-white text-indigo-700 rounded-xl text-sm font-semibold hover:bg-indigo-50 active:scale-[.98] transition disabled:opacity-50 disabled:cursor-not-allowed">
               <Icon n="refresh" cls={`w-4 h-4 ${loading?'spin':''}`}/>{loading?'Scanning…':'Run Now'}
             </button>
-            <button onClick={()=>setAutoRun(!autoRun)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition ${autoRun?'bg-emerald-400 text-white hover:bg-emerald-500':'bg-white/10 text-white hover:bg-white/20'}`}>
+            <button onClick={()=>toggleAutoRun(!autoRun)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition ${autoRun?'bg-emerald-400 text-white hover:bg-emerald-500':'bg-white/10 text-white hover:bg-white/20'}`}>
               {autoRun?<><Icon n="check" cls="w-4 h-4"/>Auto-Running (every 4h)</>:<>Enable Auto-Run</>}
             </button>
           </div>
@@ -548,14 +568,22 @@ const Agent = ({onAddLeads, apiKey, zips})=>{
         </div>
       )}
 
-      {log.length>0&&(
-        <div className="bg-slate-900 rounded-2xl p-5">
-          <div className="text-slate-400 text-xs font-semibold uppercase tracking-wide mb-3">Agent Log</div>
-          <div className="space-y-1 max-h-36 overflow-y-auto font-mono text-xs">
-            {log.map((l,i)=><div key={i} className="text-slate-400"><span className="text-slate-600 mr-2">{l.time}</span>{l.msg}</div>)}
-          </div>
+      <div className="bg-slate-900 rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-slate-400 text-xs font-semibold uppercase tracking-wide">Agent Log ({log.length})</div>
+          {log.length>0&&<button onClick={clearLog} className="text-slate-600 hover:text-slate-400 text-xs transition">Clear</button>}
         </div>
-      )}
+        {log.length===0
+          ?<div className="text-slate-600 text-xs font-mono">No activity yet — hit Run Now to start.</div>
+          :<div className="space-y-1 max-h-56 overflow-y-auto font-mono text-xs">
+            {log.map((l,i)=>(
+              <div key={i} className={`${l.msg.startsWith('✓')?'text-emerald-400':l.msg.startsWith('✗')?'text-rose-400':'text-slate-400'}`}>
+                <span className="text-slate-600 mr-2">{l.time}</span>{l.msg}
+              </div>
+            ))}
+          </div>
+        }
+      </div>
     </div>
   );
 };
