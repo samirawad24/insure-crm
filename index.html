@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>InsureCRM</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: #f1f5f9; }
+    ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin 1s linear infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .pulse { animation: pulse 2s ease-in-out infinite; }
+    @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+    .fade-in { animation: fadeIn .2s ease-out; }
+  </style>
+</head>
+<body class="bg-slate-50">
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef, useMemo } = React;
+
+/* ─── CONSTANTS ─────────────────────────────────── */
+const STATUSES = {
+  not_called:      { label:'Not Called',      bg:'bg-slate-100',    text:'text-slate-600',   dot:'bg-slate-400',   ring:'ring-slate-300'  },
+  no_answer:       { label:'No Answer',       bg:'bg-amber-100',    text:'text-amber-700',   dot:'bg-amber-400',   ring:'ring-amber-300'  },
+  interested:      { label:'Interested',      bg:'bg-blue-100',     text:'text-blue-700',    dot:'bg-blue-500',    ring:'ring-blue-300'   },
+  appointment_set: { label:'Appt Set',        bg:'bg-violet-100',   text:'text-violet-700',  dot:'bg-violet-500',  ring:'ring-violet-300' },
+  sold:            { label:'Sold ✓',          bg:'bg-emerald-100',  text:'text-emerald-700', dot:'bg-emerald-500', ring:'ring-emerald-300'},
+  not_interested:  { label:'Not Interested',  bg:'bg-rose-100',     text:'text-rose-700',    dot:'bg-rose-500',    ring:'ring-rose-300'   },
+  follow_up:       { label:'Follow Up',       bg:'bg-orange-100',   text:'text-orange-700',  dot:'bg-orange-400',  ring:'ring-orange-300' },
+};
+const STATUS_ORDER = ['not_called','no_answer','interested','appointment_set','sold','not_interested','follow_up'];
+const POLICY_TYPES = ['Life Insurance','Term Life','Whole Life','Health Insurance','ACA / Marketplace','Medicare Supplement','Group Health','Key Man / Business','Other'];
+
+/* ─── STORAGE ────────────────────────────────────── */
+const ls = { get:(k,d)=>{ try{const v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch{return d;} }, set:(k,v)=>{ try{localStorage.setItem(k,JSON.stringify(v));}catch{} } };
+
+/* ─── UTILS ──────────────────────────────────────── */
+const uid  = ()=>`${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`;
+const toDay = ()=>new Date().toISOString().slice(0,10);
+const fmt  = (d,short=false)=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',short?{month:'short',day:'numeric'}:{month:'short',day:'numeric',year:'numeric'}):'—';
+const fmtPhone = p=>{ const d=(p||'').replace(/\D/g,''); return d.length===10?`(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`:p||'—'; };
+const fmtMoney = n=>n?`$${Number(n).toLocaleString()}`:'—';
+
+/* ─── ICONS ──────────────────────────────────────── */
+const icons = {
+  dashboard:<path strokeLinecap="round" strokeLinejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>,
+  users:<path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>,
+  bot:<><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></>,
+  settings:<path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>,
+  plus:<path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/>,
+  phone:<path strokeLinecap="round" strokeLinejoin="round" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.948V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 7V5z"/>,
+  check:<path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/>,
+  x:<path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"/>,
+  download:<path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>,
+  refresh:<path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>,
+  home:<path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>,
+  eye:<><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></>,
+  pencil:<path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>,
+  trash:<path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>,
+  bell:<path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>,
+  key:<path strokeLinecap="round" strokeLinejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>,
+  link:<path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>,
+  chart:<path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>,
+  import:<path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>,
+  menu:<path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16"/>,
+  close:<path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"/>,
+};
+const Icon = ({n, cls='w-5 h-5'})=>(
+  <svg className={cls} fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">{icons[n]}</svg>
+);
+
+/* ─── CHIP / BADGE ───────────────────────────────── */
+const Badge = ({status})=>{
+  const s=STATUSES[status]||STATUSES.not_called;
+  return <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold ${s.bg} ${s.text}`}><span className={`w-1.5 h-1.5 rounded-full ${s.dot}`}/>{s.label}</span>;
+};
+
+/* ─── MODAL ──────────────────────────────────────── */
+const Modal = ({title,onClose,children,wide=false})=>(
+  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div className={`bg-white rounded-2xl shadow-2xl w-full ${wide?'max-w-2xl':'max-w-lg'} max-h-[92vh] flex flex-col fade-in`}>
+      <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 shrink-0">
+        <h2 className="font-semibold text-slate-800">{title}</h2>
+        <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition"><Icon n="x" cls="w-4 h-4"/></button>
+      </div>
+      <div className="overflow-y-auto p-6">{children}</div>
+    </div>
+  </div>
+);
+
+/* ─── INPUT COMPONENTS ───────────────────────────── */
+const inp = "w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-800 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition placeholder:text-slate-300";
+const lbl = "block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide";
+
+/* ─── LEAD FORM ──────────────────────────────────── */
+const LeadForm = ({init, onSave, onClose})=>{
+  const def = {name:'',phone:'',address:'',city:'',state:'FL',zip:'',email:'',notes:'',followUpDate:'',policyInterest:'',status:'not_called',salePrice:'',saleDate:''};
+  const [f,setF] = useState({...def,...(init||{})});
+  const upd = k=>e=>setF(p=>({...p,[k]:e.target.value}));
+  return(
+    <form onSubmit={e=>{e.preventDefault();onSave(f);}} className="space-y-4">
+      <div className="grid grid-cols-2 gap-4">
+        <div className="col-span-2"><label className={lbl}>Full Name *</label><input className={inp} value={f.name} onChange={upd('name')} required placeholder="John Smith"/></div>
+        <div><label className={lbl}>Phone *</label><input className={inp} value={f.phone} onChange={upd('phone')} required placeholder="(407) 555-0000" inputMode="tel"/></div>
+        <div><label className={lbl}>Email</label><input className={inp} value={f.email} onChange={upd('email')} placeholder="john@gmail.com" type="email"/></div>
+        <div className="col-span-2"><label className={lbl}>Address</label><input className={inp} value={f.address} onChange={upd('address')} placeholder="123 Main Street"/></div>
+        <div><label className={lbl}>City</label><input className={inp} value={f.city} onChange={upd('city')} placeholder="Orlando"/></div>
+        <div><label className={lbl}>ZIP Code</label><input className={inp} value={f.zip} onChange={upd('zip')} placeholder="32801" maxLength={5}/></div>
+        <div><label className={lbl}>Policy Interest</label>
+          <select className={inp} value={f.policyInterest} onChange={upd('policyInterest')}>
+            <option value="">Select...</option>
+            {POLICY_TYPES.map(t=><option key={t}>{t}</option>)}
+          </select>
+        </div>
+        <div><label className={lbl}>Status</label>
+          <select className={inp} value={f.status} onChange={upd('status')}>
+            {STATUS_ORDER.map(k=><option key={k} value={k}>{STATUSES[k].label}</option>)}
+          </select>
+        </div>
+        <div><label className={lbl}>Follow-Up Date</label><input className={inp} type="date" value={f.followUpDate} onChange={upd('followUpDate')}/></div>
+        <div><label className={lbl}>Sale Price</label><input className={inp} value={f.salePrice} onChange={upd('salePrice')} placeholder="$450,000"/></div>
+        <div className="col-span-2"><label className={lbl}>Notes</label><textarea className={inp+' resize-none'} rows={3} value={f.notes} onChange={upd('notes')} placeholder="Add call notes, objections, info..."/></div>
+      </div>
+      <div className="flex gap-3 pt-1">
+        <button type="button" onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition">Cancel</button>
+        <button type="submit" className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 active:scale-[.98] transition">Save Lead</button>
+      </div>
+    </form>
+  );
+};
+
+/* ─── LEAD DETAIL MODAL ──────────────────────────── */
+const LeadDetail = ({lead, onEdit, onClose})=>{
+  const s=STATUSES[lead.status]||STATUSES.not_called;
+  const ini=lead.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  return(
+    <div className="space-y-5">
+      <div className="flex items-center gap-4">
+        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-lg font-bold text-white bg-gradient-to-br from-indigo-500 to-indigo-700 shrink-0`}>{ini}</div>
+        <div className="flex-1 min-w-0">
+          <h3 className="text-xl font-bold text-slate-800 truncate">{lead.name}</h3>
+          <div className="mt-1"><Badge status={lead.status}/></div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {[['Phone',fmtPhone(lead.phone)],['Email',lead.email||'—'],['Address',[lead.address,lead.city,lead.state,lead.zip].filter(Boolean).join(', ')||'—'],['Policy',lead.policyInterest||'—'],['Sale Price',lead.salePrice||'—'],['Sale Date',fmt(lead.saleDate)],['Follow Up',fmt(lead.followUpDate)],['Added',fmt(lead.addedDate)],['Source',(lead.source||'manual').toUpperCase()]].map(([k,v])=>(
+          <div key={k} className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+            <div className="text-xs font-semibold text-slate-400 mb-0.5">{k}</div>
+            <div className="text-sm font-medium text-slate-700 break-words">{v}</div>
+          </div>
+        ))}
+      </div>
+      {lead.notes&&<div className="bg-amber-50 border border-amber-100 rounded-xl p-4"><div className="text-xs font-semibold text-amber-500 mb-1">NOTES</div><p className="text-sm text-amber-900 whitespace-pre-wrap">{lead.notes}</p></div>}
+      <div className="flex gap-2 pt-1">
+        <a href={`tel:${lead.phone}`} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition">
+          <Icon n="phone" cls="w-4 h-4"/> Call Now
+        </a>
+        <a href={`https://www.truepeoplesearch.com/results?name=${encodeURIComponent(lead.name)}&citystatezip=${encodeURIComponent((lead.city||'')+(lead.state?' '+lead.state:'')+(lead.zip?' '+lead.zip:''))}`} target="_blank" rel="noreferrer" className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50 transition">
+          <Icon n="link" cls="w-4 h-4"/> People Search
+        </a>
+        <button onClick={onEdit} className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50 transition">
+          <Icon n="pencil" cls="w-4 h-4"/>
+        </button>
+      </div>
+    </div>
+  );
+};
+
+/* ─── DASHBOARD ──────────────────────────────────── */
+const Dashboard = ({leads})=>{
+  const now = toDay();
+  const total  = leads.length;
+  const called = leads.filter(l=>l.calledDate===now).length;
+  const appts  = leads.filter(l=>l.status==='appointment_set').length;
+  const sold   = leads.filter(l=>l.status==='sold').length;
+  const followUps = leads.filter(l=>l.followUpDate&&l.followUpDate>=now).sort((a,b)=>a.followUpDate.localeCompare(b.followUpDate)).slice(0,6);
+  const recent = [...leads].sort((a,b)=>(b.addedDate||'').localeCompare(a.addedDate||'')).slice(0,5);
+  const cards = [
+    {label:'Total Leads',value:total,icon:'users',grad:'from-indigo-500 to-indigo-600'},
+    {label:'Called Today',value:called,icon:'phone',grad:'from-sky-500 to-sky-600'},
+    {label:'Appointments',value:appts,icon:'bell',grad:'from-violet-500 to-violet-600'},
+    {label:'Sold',value:sold,icon:'check',grad:'from-emerald-500 to-emerald-600'},
+  ];
+  return(
+    <div className="space-y-6 fade-in">
+      <div>
+        <h1 className="text-2xl font-bold text-slate-800">Good {['morning','afternoon','evening'][Math.min(2,Math.floor(new Date().getHours()/12))]}, Samir 👋</h1>
+        <p className="text-slate-500 text-sm mt-0.5">{new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</p>
+      </div>
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        {cards.map(c=>(
+          <div key={c.label} className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+            <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${c.grad} flex items-center justify-center mb-3`}><Icon n={c.icon} cls="w-5 h-5 text-white"/></div>
+            <div className="text-3xl font-bold text-slate-800">{c.value}</div>
+            <div className="text-sm text-slate-500 mt-0.5">{c.label}</div>
+          </div>
+        ))}
+      </div>
+      <div className="grid xl:grid-cols-2 gap-6">
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
+          <h3 className="font-semibold text-slate-700 mb-1 flex items-center gap-2"><Icon n="chart" cls="w-4 h-4 text-indigo-500"/>Pipeline Breakdown</h3>
+          <p className="text-xs text-slate-400 mb-4">{total} total leads across all stages</p>
+          <div className="space-y-3">
+            {STATUS_ORDER.map(k=>{
+              const s=STATUSES[k]; const count=leads.filter(l=>l.status===k).length; const pct=total?Math.round((count/total)*100):0;
+              return(
+                <div key={k} className="flex items-center gap-3">
+                  <span className={`w-2 h-2 rounded-full ${s.dot} shrink-0`}/>
+                  <span className="text-sm text-slate-600 w-32 shrink-0">{s.label}</span>
+                  <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden"><div className={`h-full ${s.dot} rounded-full transition-all duration-700`} style={{width:`${pct}%`}}/></div>
+                  <span className="text-sm font-semibold text-slate-700 w-8 text-right">{count}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="space-y-4">
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
+            <h3 className="font-semibold text-slate-700 mb-4 flex items-center gap-2"><Icon n="bell" cls="w-4 h-4 text-orange-500"/>Upcoming Follow-Ups</h3>
+            {followUps.length===0?<div className="text-center py-4 text-slate-400 text-sm">No follow-ups scheduled</div>:(
+              <div className="space-y-2">
+                {followUps.map(l=>(
+                  <div key={l.id} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-50 transition">
+                    <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 text-xs font-bold shrink-0">{l.name.charAt(0)}</div>
+                    <div className="flex-1 min-w-0"><div className="text-sm font-medium text-slate-700 truncate">{l.name}</div><div className="text-xs text-slate-400 truncate">{fmtPhone(l.phone)}</div></div>
+                    <span className="text-xs font-semibold text-orange-600 bg-orange-50 px-2 py-1 rounded-lg shrink-0">{fmt(l.followUpDate,true)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
+            <h3 className="font-semibold text-slate-700 mb-4 flex items-center gap-2"><Icon n="users" cls="w-4 h-4 text-indigo-500"/>Recently Added</h3>
+            {recent.length===0?<div className="text-center py-4 text-slate-400 text-sm">No leads yet</div>:(
+              <div className="space-y-2">
+                {recent.map(l=>(
+                  <div key={l.id} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-50 transition">
+                    <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 text-xs font-bold shrink-0">{l.name.charAt(0)||'?'}</div>
+                    <div className="flex-1 min-w-0"><div className="text-sm font-medium text-slate-700 truncate">{l.name||l.address||'Unknown'}</div><div className="text-xs text-slate-400">{fmt(l.addedDate,true)}</div></div>
+                    <Badge status={l.status}/>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ─── LEADS PAGE ─────────────────────────────────── */
+const Leads = ({leads, onUpdate, onDelete})=>{
+  const [search,setSearch]=useState('');
+  const [fStatus,setFStatus]=useState('all');
+  const [sortBy,setSortBy]=useState('addedDate');
+  const [viewLead,setViewLead]=useState(null);
+  const [editLead,setEditLead]=useState(null);
+  const [showAdd,setShowAdd]=useState(false);
+  const [delConfirm,setDelConfirm]=useState(null);
+
+  const filtered = useMemo(()=>{
+    const q=search.toLowerCase();
+    return leads.filter(l=>{
+      const m=!q||l.name.toLowerCase().includes(q)||l.phone.includes(q)||(l.address||'').toLowerCase().includes(q)||(l.zip||'').includes(q)||(l.city||'').toLowerCase().includes(q);
+      const s=fStatus==='all'||l.status===fStatus;
+      return m&&s;
+    }).sort((a,b)=>{
+      if(sortBy==='name') return a.name.localeCompare(b.name);
+      if(sortBy==='status') return a.status.localeCompare(b.status);
+      if(sortBy==='followUp') return (a.followUpDate||'9').localeCompare(b.followUpDate||'9');
+      return (b.addedDate||'').localeCompare(a.addedDate||'');
+    });
+  },[leads,search,fStatus,sortBy]);
+
+  const quickStatus=(lead,status)=>{
+    onUpdate({...lead,status,calledDate:status!=='not_called'?toDay():lead.calledDate});
+  };
+
+  const exportCSV=()=>{
+    const h=['Name','Phone','Email','Address','City','ZIP','Status','Policy','Sale Price','Sale Date','Follow Up Date','Notes','Added','Source'];
+    const rows=leads.map(l=>[l.name,l.phone,l.email,l.address,l.city,l.zip,STATUSES[l.status]?.label,l.policyInterest,l.salePrice,l.saleDate,l.followUpDate,l.notes,l.addedDate,l.source]);
+    const csv=[h,...rows].map(r=>r.map(c=>`"${(c||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
+    const a=document.createElement('a');a.href='data:text/csv,'+encodeURIComponent(csv);a.download=`leads-${toDay()}.csv`;a.click();
+  };
+
+  const colorDot={not_called:'bg-slate-400',no_answer:'bg-amber-400',interested:'bg-blue-500',appointment_set:'bg-violet-500',sold:'bg-emerald-500',not_interested:'bg-rose-500',follow_up:'bg-orange-400'};
+
+  return(
+    <div className="space-y-5 fade-in">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div><h1 className="text-2xl font-bold text-slate-800">Leads</h1><p className="text-slate-500 text-sm">{filtered.length} of {leads.length} shown</p></div>
+        <div className="flex gap-2">
+          <button onClick={exportCSV} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition"><Icon n="download" cls="w-4 h-4"/>Export CSV</button>
+          <button onClick={()=>setShowAdd(true)} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 active:scale-[.98] transition"><Icon n="plus" cls="w-4 h-4"/>Add Lead</button>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+        <div className="p-3 border-b border-slate-100 flex flex-wrap gap-2">
+          <div className="relative flex-1 min-w-44">
+            <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            <input className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 placeholder:text-slate-300" placeholder="Search name, phone, address, ZIP…" value={search} onChange={e=>setSearch(e.target.value)}/>
+          </div>
+          <select className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700" value={fStatus} onChange={e=>setFStatus(e.target.value)}>
+            <option value="all">All Statuses</option>
+            {STATUS_ORDER.map(k=><option key={k} value={k}>{STATUSES[k].label}</option>)}
+          </select>
+          <select className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700" value={sortBy} onChange={e=>setSortBy(e.target.value)}>
+            <option value="addedDate">Newest First</option>
+            <option value="name">Name A–Z</option>
+            <option value="status">By Status</option>
+            <option value="followUp">By Follow-Up</option>
+          </select>
+        </div>
+
+        {filtered.length===0?(
+          <div className="text-center py-20">
+            <Icon n="users" cls="w-12 h-12 mx-auto mb-3 text-slate-200"/>
+            <p className="font-semibold text-slate-400">No leads found</p>
+            <p className="text-sm text-slate-300 mt-1">Add a lead manually or run the agent</p>
+          </div>
+        ):(
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[700px]">
+              <thead><tr className="bg-slate-50/80 border-b border-slate-100 text-left">
+                <th className="px-4 py-3 font-semibold text-slate-400 text-xs uppercase tracking-wide">Contact</th>
+                <th className="px-4 py-3 font-semibold text-slate-400 text-xs uppercase tracking-wide">Phone</th>
+                <th className="px-4 py-3 font-semibold text-slate-400 text-xs uppercase tracking-wide hidden md:table-cell">Location</th>
+                <th className="px-4 py-3 font-semibold text-slate-400 text-xs uppercase tracking-wide">Status</th>
+                <th className="px-4 py-3 font-semibold text-slate-400 text-xs uppercase tracking-wide hidden lg:table-cell">Follow Up</th>
+                <th className="px-4 py-3 font-semibold text-slate-400 text-xs uppercase tracking-wide text-right">Actions</th>
+              </tr></thead>
+              <tbody className="divide-y divide-slate-50">
+                {filtered.map(l=>(
+                  <tr key={l.id} className="hover:bg-indigo-50/30 transition group">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-400 to-indigo-600 flex items-center justify-center text-white text-xs font-bold shrink-0">{(l.name||'?').charAt(0).toUpperCase()}</div>
+                        <div><div className="font-semibold text-slate-700">{l.name||<span className="text-slate-400 italic">No name</span>}</div>{l.policyInterest&&<div className="text-xs text-slate-400">{l.policyInterest}</div>}</div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3"><a href={`tel:${l.phone}`} className="font-mono text-slate-700 hover:text-indigo-600 transition text-xs">{fmtPhone(l.phone)}</a></td>
+                    <td className="px-4 py-3 hidden md:table-cell"><div className="text-xs text-slate-500">{[l.address,l.city].filter(Boolean).join(', ')||'—'}</div>{l.zip&&<div className="text-xs text-slate-400 font-mono">{l.zip}</div>}</td>
+                    <td className="px-4 py-3"><Badge status={l.status}/></td>
+                    <td className="px-4 py-3 hidden lg:table-cell"><span className={`text-xs font-medium ${l.followUpDate&&l.followUpDate<toDay()?'text-rose-500':'text-slate-400'}`}>{fmt(l.followUpDate,true)}</span></td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-1">
+                        <div className="flex gap-0.5 mr-2 opacity-40 group-hover:opacity-100 transition">
+                          {STATUS_ORDER.filter(s=>s!=='not_called').map(s=>(
+                            <button key={s} title={STATUSES[s].label} onClick={()=>quickStatus(l,s)} className={`w-4 h-4 rounded-full ${colorDot[s]} hover:scale-125 transition`}/>
+                          ))}
+                        </div>
+                        <button onClick={()=>setViewLead(l)} className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600 transition" title="View"><Icon n="eye" cls="w-4 h-4"/></button>
+                        <button onClick={()=>setEditLead(l)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition" title="Edit"><Icon n="pencil" cls="w-4 h-4"/></button>
+                        <button onClick={()=>setDelConfirm(l.id)} className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-500 transition" title="Delete"><Icon n="trash" cls="w-4 h-4"/></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {showAdd&&<Modal title="Add New Lead" onClose={()=>setShowAdd(false)} wide>
+        <LeadForm onSave={f=>{onUpdate({...f,id:uid(),addedDate:toDay(),source:'manual'});setShowAdd(false);}} onClose={()=>setShowAdd(false)}/>
+      </Modal>}
+      {editLead&&<Modal title="Edit Lead" onClose={()=>setEditLead(null)} wide>
+        <LeadForm init={editLead} onSave={f=>{onUpdate(f);setEditLead(null);}} onClose={()=>setEditLead(null)}/>
+      </Modal>}
+      {viewLead&&<Modal title="Lead Details" onClose={()=>setViewLead(null)}>
+        <LeadDetail lead={viewLead} onEdit={()=>{setEditLead(viewLead);setViewLead(null);}} onClose={()=>setViewLead(null)}/>
+      </Modal>}
+      {delConfirm&&<Modal title="Delete Lead?" onClose={()=>setDelConfirm(null)}>
+        <p className="text-slate-600 text-sm mb-5">This lead will be permanently removed. Are you sure?</p>
+        <div className="flex gap-3">
+          <button onClick={()=>setDelConfirm(null)} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition">Cancel</button>
+          <button onClick={()=>{onDelete(delConfirm);setDelConfirm(null);}} className="flex-1 py-2.5 rounded-xl bg-rose-500 text-white text-sm font-semibold hover:bg-rose-600 transition">Delete</button>
+        </div>
+      </Modal>}
+    </div>
+  );
+};
+
+/* ─── AGENT PAGE ─────────────────────────────────── */
+const Agent = ({onAddLeads, apiKey, zips})=>{
+  const [results,setResults]=useState([]);
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState('');
+  const [added,setAdded]=useState(new Set());
+  const [autoRun,setAutoRun]=useState(false);
+  const [lastRun,setLastRun]=useState(ls.get('agent_lastrun',null));
+  const [log,setLog]=useState([]);
+  const timer=useRef(null);
+
+  const addLog = msg=>setLog(p=>[{time:new Date().toLocaleTimeString(),msg},...p.slice(0,19)]);
+
+  const runAgent=useCallback(async()=>{
+    if(!apiKey){setErr('Add your RapidAPI key in Settings first.');return;}
+    if(!zips.length){setErr('Add at least one ZIP code in Settings first.');return;}
+    setLoading(true);setErr('');setResults([]);
+    addLog('Agent started — scanning '+zips.join(', '));
+    const all=[];
+    for(const zip of zips.slice(0,5)){
+      try{
+        addLog(`Searching ZIP ${zip}…`);
+        const res=await fetch(`https://zillow56.p.rapidapi.com/search?location=${zip}&status=recently_sold&sortSelection=days&listing_type=by_agent`,{
+          headers:{'x-rapidapi-host':'zillow56.p.rapidapi.com','x-rapidapi-key':apiKey}
+        });
+        if(!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data=await res.json();
+        const props=(data.results||[]).slice(0,15).map(p=>({
+          id:uid(), name:'', phone:'',
+          address:p.streetAddress||p.address||'',
+          city:p.city||'', state:p.state||'FL', zip:p.zipcode||zip,
+          salePrice:p.price?`$${Number(p.price).toLocaleString()}`:'',
+          saleDate:p.soldDate?new Date(p.soldDate).toISOString().slice(0,10):'',
+          status:'not_called', source:'agent', addedDate:toDay(),
+          notes:`Recently sold · ${p.price?'$'+Number(p.price).toLocaleString():'N/A'} · ${p.bedrooms||'?'} bed / ${p.bathrooms||'?'} bath`,
+          policyInterest:'Life Insurance', email:'',followUpDate:'',
+        }));
+        all.push(...props);
+        addLog(`✓ ${props.length} properties found in ${zip}`);
+      }catch(e){
+        addLog(`✗ Error for ${zip}: ${e.message}`);
+        setErr(prev=>`${prev}${prev?'\n':''}${zip}: ${e.message}`);
+      }
+    }
+    setResults(all);
+    const ts=new Date().toLocaleString();
+    setLastRun(ts);ls.set('agent_lastrun',ts);
+    addLog(`Done — ${all.length} total properties found`);
+    setLoading(false);
+  },[apiKey,zips]);
+
+  useEffect(()=>{
+    if(autoRun){runAgent();timer.current=setInterval(runAgent,4*60*60*1000);}
+    else{clearInterval(timer.current);}
+    return()=>clearInterval(timer.current);
+  },[autoRun]);
+
+  const addSingle=r=>{onAddLeads([r]);setAdded(p=>new Set([...p,r.id]));};
+  const addAll=()=>{onAddLeads(results.filter(r=>!added.has(r.id)));setAdded(new Set(results.map(r=>r.id)));};
+
+  return(
+    <div className="space-y-6 fade-in">
+      <div>
+        <h1 className="text-2xl font-bold text-slate-800">Lead Finder Agent</h1>
+        <p className="text-slate-500 text-sm mt-0.5">Automatically scans recently sold homes and adds them to your CRM</p>
+      </div>
+
+      <div className="grid md:grid-cols-3 gap-4">
+        <div className="md:col-span-2 bg-gradient-to-br from-indigo-600 to-indigo-800 rounded-2xl p-6 text-white">
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className={`w-2 h-2 rounded-full ${loading?'bg-amber-400 pulse':autoRun?'bg-emerald-400 pulse':'bg-slate-400'}`}/>
+                <span className="text-indigo-200 text-xs font-medium uppercase tracking-wide">Agent Status</span>
+              </div>
+              <div className="text-2xl font-bold">{loading?'Scanning Properties…':autoRun?'Auto-Running':'Ready to Scan'}</div>
+              {lastRun&&<div className="text-indigo-300 text-xs mt-1">Last run: {lastRun}</div>}
+            </div>
+            <Icon n="bot" cls="w-12 h-12 text-indigo-400"/>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={runAgent} disabled={loading} className="flex items-center gap-2 px-4 py-2 bg-white text-indigo-700 rounded-xl text-sm font-semibold hover:bg-indigo-50 active:scale-[.98] transition disabled:opacity-50 disabled:cursor-not-allowed">
+              <Icon n="refresh" cls={`w-4 h-4 ${loading?'spin':''}`}/>{loading?'Scanning…':'Run Now'}
+            </button>
+            <button onClick={()=>setAutoRun(!autoRun)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition ${autoRun?'bg-emerald-400 text-white hover:bg-emerald-500':'bg-white/10 text-white hover:bg-white/20'}`}>
+              {autoRun?<><Icon n="check" cls="w-4 h-4"/>Auto-Running (every 4h)</>:<>Enable Auto-Run</>}
+            </button>
+          </div>
+        </div>
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+          <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Target ZIPs</div>
+          {zips.length===0?<p className="text-sm text-slate-400">No ZIPs configured — go to Settings</p>:(
+            <div className="flex flex-wrap gap-1.5">
+              {zips.map(z=><span key={z} className="px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-mono font-semibold">{z}</span>)}
+            </div>
+          )}
+          <div className="mt-3 pt-3 border-t border-slate-100 text-xs text-slate-400">
+            {results.length>0&&<span className="text-indigo-600 font-semibold">{results.length} found this run</span>}
+          </div>
+        </div>
+      </div>
+
+      {!apiKey&&(
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 flex gap-4">
+          <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center shrink-0"><Icon n="key" cls="w-5 h-5 text-amber-600"/></div>
+          <div>
+            <div className="font-semibold text-amber-800 mb-1">RapidAPI Key Needed</div>
+            <p className="text-amber-700 text-sm">To auto-find leads, you need a free API key. Go to <strong>Settings</strong> and paste it in. Steps below:</p>
+            <ol className="text-amber-700 text-sm mt-2 space-y-1 list-decimal ml-4">
+              <li>Sign up free at <a href="https://rapidapi.com" target="_blank" rel="noreferrer" className="underline font-medium">rapidapi.com</a></li>
+              <li>Search <strong>"Zillow56"</strong> and subscribe to the Basic (free) plan</li>
+              <li>Copy your API key and paste it in <strong>Settings</strong></li>
+            </ol>
+          </div>
+        </div>
+      )}
+
+      {err&&<div className="bg-rose-50 border border-rose-200 rounded-xl p-4 text-rose-700 text-sm whitespace-pre-wrap flex gap-2"><Icon n="x" cls="w-4 h-4 shrink-0 mt-0.5"/>{err}</div>}
+
+      {results.length>0&&(
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2">
+            <div className="font-semibold text-slate-700">{results.length} Properties Found</div>
+            <button onClick={addAll} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 active:scale-[.98] transition">
+              <Icon n="plus" cls="w-4 h-4"/>Add All to CRM ({results.filter(r=>!added.has(r.id)).length})
+            </button>
+          </div>
+          <div className="divide-y divide-slate-50 max-h-[480px] overflow-y-auto">
+            {results.map(r=>(
+              <div key={r.id} className={`flex items-center gap-4 px-5 py-3.5 hover:bg-slate-50/70 transition ${added.has(r.id)?'opacity-50':''}`}>
+                <div className="w-9 h-9 bg-slate-100 rounded-xl flex items-center justify-center shrink-0"><Icon n="home" cls="w-4 h-4 text-slate-500"/></div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-slate-800 text-sm truncate">{r.address||'Address unavailable'}</div>
+                  <div className="text-xs text-slate-400 mt-0.5 truncate">{[r.city,r.state,r.zip].filter(Boolean).join(', ')} · {r.salePrice||'Price N/A'} · {fmt(r.saleDate,true)}</div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <a href={`https://www.truepeoplesearch.com/results?streetaddress=${encodeURIComponent(r.address)}&citystatezip=${encodeURIComponent(r.zip||r.city)}`} target="_blank" rel="noreferrer" title="Find phone number" className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50 transition">
+                    <Icon n="link" cls="w-3 h-3"/>Find #
+                  </a>
+                  <button onClick={()=>addSingle(r)} disabled={added.has(r.id)} className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${added.has(r.id)?'bg-emerald-100 text-emerald-600 cursor-default':'bg-indigo-600 text-white hover:bg-indigo-700 active:scale-[.98]'}`}>
+                    {added.has(r.id)?<><Icon n="check" cls="w-3 h-3"/>Added</>:<><Icon n="plus" cls="w-3 h-3"/>Add</>}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {log.length>0&&(
+        <div className="bg-slate-900 rounded-2xl p-5">
+          <div className="text-slate-400 text-xs font-semibold uppercase tracking-wide mb-3">Agent Log</div>
+          <div className="space-y-1 max-h-36 overflow-y-auto font-mono text-xs">
+            {log.map((l,i)=><div key={i} className="text-slate-400"><span className="text-slate-600 mr-2">{l.time}</span>{l.msg}</div>)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ─── SETTINGS PAGE ──────────────────────────────── */
+const Settings = ({apiKey,setApiKey,zips,setZips})=>{
+  const [key,setKey]=useState(apiKey);
+  const [zip,setZip]=useState('');
+  const [saved,setSaved]=useState(false);
+  const saveKey=()=>{setApiKey(key);ls.set('crm_apikey',key);setSaved(true);setTimeout(()=>setSaved(false),2500);};
+  const addZip=()=>{if(zip.length===5&&/^\d+$/.test(zip)){const u=[...new Set([...zips,zip])];setZips(u);ls.set('crm_zips',u);setZip('');}};
+  const remZip=z=>{const u=zips.filter(x=>x!==z);setZips(u);ls.set('crm_zips',u);};
+  return(
+    <div className="space-y-6 max-w-xl fade-in">
+      <div><h1 className="text-2xl font-bold text-slate-800">Settings</h1><p className="text-slate-500 text-sm">Configure your API key and target areas</p></div>
+      <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
+        <div className="flex items-center gap-2 mb-1"><Icon n="key" cls="w-5 h-5 text-indigo-500"/><h3 className="font-semibold text-slate-700">RapidAPI Key</h3></div>
+        <div className="flex gap-2">
+          <input type="password" value={key} onChange={e=>setKey(e.target.value)} placeholder="Paste your RapidAPI key…" className={inp+' flex-1 font-mono'} onKeyDown={e=>e.key==='Enter'&&saveKey()}/>
+          <button onClick={saveKey} className="px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 transition shrink-0">Save</button>
+        </div>
+        {saved&&<p className="text-emerald-600 text-xs flex items-center gap-1"><Icon n="check" cls="w-3.5 h-3.5"/>Saved successfully</p>}
+        {apiKey&&!saved&&<p className="text-emerald-600 text-xs flex items-center gap-1"><Icon n="check" cls="w-3.5 h-3.5"/>API key is configured</p>}
+        <div className="bg-slate-50 rounded-xl p-4 text-xs text-slate-500 space-y-1.5">
+          <p className="font-semibold text-slate-600">How to get your free key:</p>
+          <p>1. Go to <a href="https://rapidapi.com/signup" target="_blank" rel="noreferrer" className="text-indigo-500 underline">rapidapi.com/signup</a> — free account, no credit card</p>
+          <p>2. Search for <strong>"Zillow56"</strong> in the API marketplace</p>
+          <p>3. Click Subscribe → choose the <strong>Basic (Free)</strong> plan</p>
+          <p>4. Copy your API key from the dashboard and paste it above</p>
+        </div>
+      </div>
+      <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
+        <div className="flex items-center gap-2 mb-1"><Icon n="home" cls="w-5 h-5 text-indigo-500"/><h3 className="font-semibold text-slate-700">Target ZIP Codes</h3></div>
+        <div className="flex gap-2">
+          <input value={zip} onChange={e=>setZip(e.target.value.replace(/\D/g,'').slice(0,5))} placeholder="32801" maxLength={5} className={inp+' flex-1 font-mono'} onKeyDown={e=>e.key==='Enter'&&addZip()}/>
+          <button onClick={addZip} className="px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 transition shrink-0">Add ZIP</button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {zips.length===0&&<span className="text-sm text-slate-400 italic">No ZIP codes added yet</span>}
+          {zips.map(z=>(
+            <div key={z} className="flex items-center gap-1.5 pl-3 pr-1.5 py-1.5 bg-indigo-50 text-indigo-700 rounded-xl text-sm font-mono font-semibold">
+              {z}
+              <button onClick={()=>remZip(z)} className="p-0.5 rounded-md hover:bg-indigo-100 hover:text-rose-500 transition"><Icon n="x" cls="w-3.5 h-3.5"/></button>
+            </div>
+          ))}
+        </div>
+        <p className="text-xs text-slate-400">Orlando area ZIPs to try: 32801, 32803, 32806, 32817, 32835</p>
+      </div>
+      <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
+        <div className="flex items-center gap-2 mb-4"><Icon n="chart" cls="w-5 h-5 text-indigo-500"/><h3 className="font-semibold text-slate-700">About InsureCRM</h3></div>
+        <div className="text-sm text-slate-500 space-y-1">
+          <p>✓ All data stored locally in your browser — fully private</p>
+          <p>✓ No server, no database, no monthly cost</p>
+          <p>✓ Export your leads anytime as CSV</p>
+          <p>✓ Deploy to GitHub Pages or Netlify — free hosting</p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ─── SIDEBAR ────────────────────────────────────── */
+const Sidebar = ({page,setPage,counts,open,setOpen})=>{
+  const nav=[
+    {id:'dashboard',label:'Dashboard',icon:'dashboard'},
+    {id:'leads',label:'Leads',icon:'users',badge:counts.total},
+    {id:'agent',label:'Lead Agent',icon:'bot'},
+    {id:'settings',label:'Settings',icon:'settings'},
+  ];
+  return(
+    <>
+      {open&&<div className="fixed inset-0 bg-black/40 z-30 lg:hidden" onClick={()=>setOpen(false)}/>}
+      <aside className={`fixed lg:static inset-y-0 left-0 z-40 w-64 bg-slate-900 flex flex-col transition-transform duration-200 ${open?'translate-x-0':'-translate-x-full lg:translate-x-0'}`}>
+        <div className="px-5 py-6 border-b border-slate-800">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 bg-gradient-to-br from-indigo-400 to-indigo-600 rounded-xl flex items-center justify-center shrink-0"><Icon n="phone" cls="w-5 h-5 text-white"/></div>
+            <div><div className="font-bold text-white">InsureCRM</div><div className="text-slate-500 text-xs">Florida Insurance</div></div>
+          </div>
+        </div>
+        <nav className="flex-1 p-3 space-y-0.5">
+          {nav.map(n=>(
+            <button key={n.id} onClick={()=>{setPage(n.id);setOpen(false);}} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition group ${page===n.id?'bg-indigo-600 text-white':'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+              <Icon n={n.icon} cls="w-4 h-4 shrink-0"/>
+              <span className="flex-1 text-left">{n.label}</span>
+              {n.badge>0&&<span className={`text-xs px-1.5 py-0.5 rounded-full ${page===n.id?'bg-indigo-500 text-white':'bg-slate-700 text-slate-300'}`}>{n.badge}</span>}
+            </button>
+          ))}
+        </nav>
+        <div className="p-4 border-t border-slate-800">
+          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-800">
+            <div className="w-7 h-7 bg-indigo-600 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0">S</div>
+            <div className="min-w-0"><div className="text-white text-xs font-semibold truncate">Samir</div><div className="text-slate-500 text-xs">FL License · 2-15</div></div>
+          </div>
+        </div>
+      </aside>
+    </>
+  );
+};
+
+/* ─── APP ────────────────────────────────────────── */
+const App = ()=>{
+  const [leads,setLeads]=useState(()=>ls.get('crm_leads',[]));
+  const [page,setPage]=useState('dashboard');
+  const [apiKey,setApiKey]=useState(()=>ls.get('crm_apikey',''));
+  const [zips,setZips]=useState(()=>ls.get('crm_zips',[]));
+  const [sideOpen,setSideOpen]=useState(false);
+
+  const upsertLead=useCallback(lead=>{
+    setLeads(prev=>{
+      const i=prev.findIndex(l=>l.id===lead.id);
+      const next=i>=0?prev.map(l=>l.id===lead.id?lead:l):[...prev,lead];
+      ls.set('crm_leads',next);return next;
+    });
+  },[]);
+  const deleteLead=useCallback(id=>{
+    setLeads(prev=>{const next=prev.filter(l=>l.id!==id);ls.set('crm_leads',next);return next;});
+  },[]);
+  const addLeads=useCallback(arr=>{
+    setLeads(prev=>{const next=[...prev,...arr];ls.set('crm_leads',next);return next;});
+  },[]);
+
+  const counts={total:leads.length};
+
+  return(
+    <div className="flex min-h-screen bg-slate-50">
+      <Sidebar page={page} setPage={setPage} counts={counts} open={sideOpen} setOpen={setSideOpen}/>
+      <div className="flex-1 flex flex-col min-w-0">
+        <header className="lg:hidden flex items-center gap-3 px-4 py-3 bg-white border-b border-slate-100 sticky top-0 z-20">
+          <button onClick={()=>setSideOpen(true)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"><Icon n="menu" cls="w-5 h-5"/></button>
+          <div className="font-bold text-slate-800">InsureCRM</div>
+        </header>
+        <main className="flex-1 p-4 lg:p-8 overflow-y-auto">
+          {page==='dashboard'&&<Dashboard leads={leads}/>}
+          {page==='leads'&&<Leads leads={leads} onUpdate={upsertLead} onDelete={deleteLead}/>}
+          {page==='agent'&&<Agent onAddLeads={addLeads} apiKey={apiKey} zips={zips}/>}
+          {page==='settings'&&<Settings apiKey={apiKey} setApiKey={setApiKey} zips={zips} setZips={setZips}/>}
+        </main>
+      </div>
+    </div>
+  );
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
