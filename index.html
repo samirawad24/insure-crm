@@ -457,22 +457,29 @@ const Agent = ({onAddLeads, apiKey, zips})=>{
       const r=await fetch(`https://private-zillow.p.rapidapi.com/skip_trace/byaddress?address=${encodeURIComponent(full)}`,{
         headers:{'x-rapidapi-host':'private-zillow.p.rapidapi.com','x-rapidapi-key':apiKey}
       });
-      if(!r.ok) return {};
+      if(!r.ok){ addLog(`⚠ Skip trace HTTP ${r.status} for ${address}`); return {}; }
       const d=await r.json();
-      // Parse flexibly — could be d.persons[0], d.owner, d.contacts[0], etc.
+      addLog(`🔍 Trace keys: ${Object.keys(d).join(', ')}`);
+      // Parse flexibly — log the raw shape so we can see what comes back
       const person=d.persons?.[0]||d.owner||d.contact||d.result||d;
-      const phones=person.phones||person.phoneNumbers||person.phone_numbers||[];
-      const emails=person.emails||person.emailAddresses||[];
+      addLog(`🔍 Person keys: ${Object.keys(person||{}).join(', ')}`);
+      const phones=person.phones||person.phoneNumbers||person.phone_numbers||person.mobilePhone||[];
+      const emails=person.emails||person.emailAddresses||person.email||[];
       const firstName=person.firstName||person.first_name||'';
       const lastName=person.lastName||person.last_name||person.surname||'';
       const fullName=person.name||person.fullName||person.full_name||[firstName,lastName].filter(Boolean).join(' ')||'';
       const phone=(Array.isArray(phones)?phones[0]:phones)?.number||
                   (Array.isArray(phones)?phones[0]:phones)?.phoneNumber||
-                  (typeof phones[0]==='string'?phones[0]:'')||'';
+                  (Array.isArray(phones)?phones[0]:phones)?.value||
+                  (typeof phones[0]==='string'?phones[0]:'')||
+                  (typeof phones==='string'?phones:'')||'';
       const email=(Array.isArray(emails)?emails[0]:emails)?.address||
-                  (typeof emails[0]==='string'?emails[0]:'')||'';
+                  (Array.isArray(emails)?emails[0]:emails)?.value||
+                  (typeof emails[0]==='string'?emails[0]:'')||
+                  (typeof emails==='string'?emails:'')||'';
+      addLog(`🔍 Parsed → name:"${fullName}" phone:"${phone}" email:"${email}"`);
       return {name:fullName, phone:phone.replace(/\D/g,'').slice(0,10)||'', email};
-    }catch{ return {}; }
+    }catch(e){ addLog(`⚠ Skip trace error: ${e.message}`); return {}; }
   };
 
   const runAgent=useCallback(async()=>{
