@@ -450,6 +450,31 @@ const Agent = ({onAddLeads, apiKey, zips})=>{
     }).filter(p=>p.address);
   };
 
+  // Skip trace a single address → returns {name, phone, email} or {}
+  const skipTrace = async (address, city, state, zip) => {
+    const full=[address,city,state,zip].filter(Boolean).join(', ');
+    try{
+      const r=await fetch(`https://private-zillow.p.rapidapi.com/skip_trace/byaddress?address=${encodeURIComponent(full)}`,{
+        headers:{'x-rapidapi-host':'private-zillow.p.rapidapi.com','x-rapidapi-key':apiKey}
+      });
+      if(!r.ok) return {};
+      const d=await r.json();
+      // Parse flexibly — could be d.persons[0], d.owner, d.contacts[0], etc.
+      const person=d.persons?.[0]||d.owner||d.contact||d.result||d;
+      const phones=person.phones||person.phoneNumbers||person.phone_numbers||[];
+      const emails=person.emails||person.emailAddresses||[];
+      const firstName=person.firstName||person.first_name||'';
+      const lastName=person.lastName||person.last_name||person.surname||'';
+      const fullName=person.name||person.fullName||person.full_name||[firstName,lastName].filter(Boolean).join(' ')||'';
+      const phone=(Array.isArray(phones)?phones[0]:phones)?.number||
+                  (Array.isArray(phones)?phones[0]:phones)?.phoneNumber||
+                  (typeof phones[0]==='string'?phones[0]:'')||'';
+      const email=(Array.isArray(emails)?emails[0]:emails)?.address||
+                  (typeof emails[0]==='string'?emails[0]:'')||'';
+      return {name:fullName, phone:phone.replace(/\D/g,'').slice(0,10)||'', email};
+    }catch{ return {}; }
+  };
+
   const runAgent=useCallback(async()=>{
     if(!apiKey){setErr('Add your RapidAPI key in Settings first.');return;}
     if(!zips.length){setErr('Add at least one ZIP code in Settings first.');return;}
@@ -465,10 +490,24 @@ const Agent = ({onAddLeads, apiKey, zips})=>{
         });
         if(!res.ok) throw new Error(`HTTP ${res.status}`);
         const data=await res.json();
-        addLog(`Response keys: ${Object.keys(data).join(', ')} | resultsCount: ${data.resultsCount??'N/A'}`);
+        addLog(`Response keys: ${Object.keys(data).join(', ')} | count: ${data.resultsCount??'N/A'}`);
         const props=parseProps(data,zip);
+        addLog(`Found ${props.length} properties in ${zip} — skip tracing…`);
+        // Skip trace up to 10 per run total to conserve API calls
+        const traceLimit=Math.max(0,10-all.length);
+        for(let i=0;i<props.length;i++){
+          if(i<traceLimit && props[i].address){
+            const info=await skipTrace(props[i].address,props[i].city,props[i].state,props[i].zip);
+            if(info.name||info.phone){
+              props[i].name=info.name||props[i].name;
+              props[i].phone=info.phone||props[i].phone;
+              props[i].email=info.email||props[i].email;
+              addLog(`📞 ${props[i].address} → ${info.name||'Unknown'} ${info.phone?'('+info.phone+')':''}`);
+            }
+          }
+        }
         all.push(...props);
-        addLog(`✓ ${props.length} leads added from ${zip}`);
+        addLog(`✓ ${props.length} leads from ${zip}`);
       }catch(e){
         addLog(`✗ Error for ${zip}: ${e.message}`);
         setErr(prev=>`${prev}${prev?'\n':''}${zip}: ${e.message}`);
@@ -477,7 +516,7 @@ const Agent = ({onAddLeads, apiKey, zips})=>{
     setResults(all);
     const ts=new Date().toLocaleString();
     setLastRun(ts);ls.set('agent_lastrun',ts);
-    addLog(`Done — ${all.length} total properties found`);
+    addLog(`Done — ${all.length} properties found`);
     setLoading(false);
   },[apiKey,zips]);
 
