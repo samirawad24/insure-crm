@@ -416,19 +416,24 @@ const Agent = ({onAddLeads, apiKey, zips})=>{
     for(const zip of zips.slice(0,5)){
       try{
         addLog(`Searching ZIP ${zip}…`);
-        const res=await fetch(`https://zillow56.p.rapidapi.com/search?location=${zip}&status=recently_sold&sortSelection=days&listing_type=by_agent`,{
-          headers:{'x-rapidapi-host':'zillow56.p.rapidapi.com','x-rapidapi-key':apiKey}
+        const zillowUrl=`https://www.zillow.com/homes/recently_sold/${zip}_rb/`;
+        const res=await fetch(`https://private-zillow.p.rapidapi.com/search/byurl?url=${encodeURIComponent(zillowUrl)}`,{
+          headers:{'x-rapidapi-host':'private-zillow.p.rapidapi.com','x-rapidapi-key':apiKey}
         });
         if(!res.ok) throw new Error(`HTTP ${res.status}`);
         const data=await res.json();
-        const props=(data.results||[]).slice(0,15).map(p=>({
+        // private-zillow returns results in data.props, data.results, or data.listResults
+        const raw=(data.props||data.results||data.listResults||data.cat1?.searchResults?.listResults||[]);
+        const props=raw.slice(0,15).map(p=>({
           id:uid(), name:'', phone:'',
-          address:p.streetAddress||p.address||'',
-          city:p.city||'', state:p.state||'FL', zip:p.zipcode||zip,
-          salePrice:p.price?`$${Number(p.price).toLocaleString()}`:'',
-          saleDate:p.soldDate?new Date(p.soldDate).toISOString().slice(0,10):'',
+          address:p.streetAddress||p.address||p.hdpData?.homeInfo?.streetAddress||'',
+          city:p.city||p.hdpData?.homeInfo?.city||'',
+          state:p.state||p.hdpData?.homeInfo?.state||'FL',
+          zip:p.zipcode||p.hdpData?.homeInfo?.zipcode||zip,
+          salePrice:(p.price||p.hdpData?.homeInfo?.price)?`$${Number(p.price||p.hdpData?.homeInfo?.price).toLocaleString()}`:'',
+          saleDate:(p.soldDate||p.hdpData?.homeInfo?.dateSold)?new Date(p.soldDate||p.hdpData?.homeInfo?.dateSold).toISOString().slice(0,10):'',
           status:'not_called', source:'agent', addedDate:toDay(),
-          notes:`Recently sold · ${p.price?'$'+Number(p.price).toLocaleString():'N/A'} · ${p.bedrooms||'?'} bed / ${p.bathrooms||'?'} bath`,
+          notes:`Recently sold · ${(p.price||p.hdpData?.homeInfo?.price)?'$'+Number(p.price||p.hdpData?.homeInfo?.price).toLocaleString():'N/A'} · ${p.beds||p.hdpData?.homeInfo?.bedrooms||'?'} bed / ${p.baths||p.hdpData?.homeInfo?.bathrooms||'?'} bath`,
           policyInterest:'Life Insurance', email:'',followUpDate:'',
         }));
         all.push(...props);
@@ -504,7 +509,7 @@ const Agent = ({onAddLeads, apiKey, zips})=>{
             <p className="text-amber-700 text-sm">To auto-find leads, you need a free API key. Go to <strong>Settings</strong> and paste it in. Steps below:</p>
             <ol className="text-amber-700 text-sm mt-2 space-y-1 list-decimal ml-4">
               <li>Sign up free at <a href="https://rapidapi.com" target="_blank" rel="noreferrer" className="underline font-medium">rapidapi.com</a></li>
-              <li>Search <strong>"Zillow56"</strong> and subscribe to the Basic (free) plan</li>
+              <li>Go to <a href="https://rapidapi.com/oneapiproject/api/private-zillow" target="_blank" rel="noreferrer" className="underline font-medium">private-zillow API</a> and subscribe to the Basic (free) plan</li>
               <li>Copy your API key and paste it in <strong>Settings</strong></li>
             </ol>
           </div>
@@ -577,8 +582,8 @@ const Settings = ({apiKey,setApiKey,zips,setZips})=>{
         <div className="bg-slate-50 rounded-xl p-4 text-xs text-slate-500 space-y-1.5">
           <p className="font-semibold text-slate-600">How to get your free key:</p>
           <p>1. Go to <a href="https://rapidapi.com/signup" target="_blank" rel="noreferrer" className="text-indigo-500 underline">rapidapi.com/signup</a> — free account, no credit card</p>
-          <p>2. Search for <strong>"Zillow56"</strong> in the API marketplace</p>
-          <p>3. Click Subscribe → choose the <strong>Basic (Free)</strong> plan</p>
+          <p>2. Go to <a href="https://rapidapi.com/oneapiproject/api/private-zillow" target="_blank" rel="noreferrer" className="text-indigo-500 underline">private-zillow API</a> and click Subscribe</p>
+          <p>3. Choose the <strong>Basic (Free)</strong> plan — 250 requests/mo included</p>
           <p>4. Copy your API key from the dashboard and paste it above</p>
         </div>
       </div>
